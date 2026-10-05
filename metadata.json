@@ -1,0 +1,6 @@
+{
+  "name": "Yaarika Collections",
+  "description": "Boutique Handloom & Designer Wear - Celebrating authentic Kerala Kasavu weaves, celebratory Kanjeevaram silks, contemporary co-ords, and festive designer wear.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
