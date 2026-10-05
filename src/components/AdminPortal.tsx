@@ -294,8 +294,13 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
       return;
     }
 
-    const primaryImage = editFormData.photos[0] || editingProduct.image || tissueKasavuImg;
-    const finalPhotos = editFormData.photos.length > 0 ? editFormData.photos : [primaryImage];
+    const pendingUrl = newPhotoUrl.trim();
+    const allPhotos = [...editFormData.photos];
+    if (pendingUrl && !allPhotos.includes(pendingUrl)) {
+      allPhotos.push(pendingUrl);
+    }
+    const primaryImage = allPhotos[0] || editingProduct.image || tissueKasavuImg;
+    const finalPhotos = allPhotos.length > 0 ? allPhotos : [primaryImage];
     const totalStock = editFormData.sizes.reduce((acc, s) => acc + (s.count || 0), 0);
 
     const updated: Product = {
@@ -442,7 +447,13 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
     }
 
     const newProducts: Product[] = validLayers.map((lyr, idx) => {
-      const primaryImage = lyr.photos[0] || products[0]?.image || tissueKasavuImg;
+      const pendingUrl = layerPhotoUrls[lyr.id]?.trim();
+      const allPhotos = [...lyr.photos];
+      if (pendingUrl && !allPhotos.includes(pendingUrl)) {
+        allPhotos.push(pendingUrl);
+      }
+      const primaryImage = allPhotos[0] || products[0]?.image || tissueKasavuImg;
+      const finalPhotos = allPhotos.length > 0 ? allPhotos : [primaryImage];
       const sizeList = lyr.activeSizes.map((s) => ({
         size: s,
         count: lyr.sizes[s] !== undefined ? lyr.sizes[s] : 5
