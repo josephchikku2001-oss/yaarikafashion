@@ -2391,9 +2391,9 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                       try {
                         setIsGsLoading(true);
                         const res = await signInWithGoogleSheets();
-                        setGsUser(res.user);
+                        setGsUser({ email: res.email });
                         setGsToken(res.accessToken);
-                        showNotification(`Connected to Google Sheets as ${res.user.email}`);
+                        showNotification(`Connected to Google Sheets as ${res.email}`);
                       } catch (err: any) {
                         alert('Google Sign-in failed: ' + err.message);
                       } finally {

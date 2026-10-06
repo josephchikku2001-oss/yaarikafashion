@@ -1,66 +1,22 @@
-import { initializeApp, getApps } from 'firebase/app';
-import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { Product, ProductCategory } from '../types';
 
-const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
-const auth = getAuth(app);
-
-const provider = new GoogleAuthProvider();
-provider.addScope('https://www.googleapis.com/auth/spreadsheets');
-provider.addScope('https://www.googleapis.com/auth/drive.file');
-
-let isSigningIn = false;
-let cachedAccessToken: string | null = null;
-
-export const initGoogleAuth = (
-  onAuthSuccess?: (user: User, token: string) => void,
-  onAuthFailure?: () => void
-) => {
-  return onAuthStateChanged(auth, async (user: User | null) => {
-    if (user) {
-      if (cachedAccessToken) {
-        if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
-      } else if (!isSigningIn) {
-        cachedAccessToken = null;
-        if (onAuthFailure) onAuthFailure();
-      }
-    } else {
-      cachedAccessToken = null;
-      if (onAuthFailure) onAuthFailure();
-    }
-  });
-};
-
-export const signInWithGoogleSheets = async (): Promise<{ user: User; accessToken: string }> => {
-  try {
-    isSigningIn = true;
-    const result = await signInWithPopup(auth, provider);
-    const credential = GoogleAuthProvider.credentialFromResult(result);
-    if (!credential?.accessToken) {
-      throw new Error('Failed to obtain Google access token for Sheets');
-    }
-    cachedAccessToken = credential.accessToken;
-    return { user: result.user, accessToken: cachedAccessToken };
-  } catch (error) {
-    console.error('Google sign in error:', error);
-    throw error;
-  } finally {
-    isSigningIn = false;
+declare global {
+  interface Window {
+    google?: any;
   }
-};
+}
 
-export const getGoogleAccessToken = async (): Promise<string | null> => {
-  return cachedAccessToken;
-};
+const CLIENT_ID = firebaseConfig.oAuthClientId || '661013424464-t9tnimaultltkhg8s7sn7lg4opprq4j2.apps.googleusercontent.com';
+const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file';
 
-export const signOutGoogle = async () => {
-  await auth.signOut();
-  cachedAccessToken = null;
-};
+let cachedAccessToken: string | null = null;
+let cachedUserEmail: string | null = null;
 
 const STORAGE_KEY_SPREADSHEET_ID = 'yaarika_google_spreadsheet_id_v1';
 const STORAGE_KEY_AUTO_SYNC = 'yaarika_auto_sync_sheets_v1';
+const STORAGE_KEY_TOKEN = 'yaarika_gs_token_v1';
+const STORAGE_KEY_EMAIL = 'yaarika_gs_email_v1';
 
 export const getStoredSpreadsheetId = (): string => {
   try {
@@ -81,7 +37,7 @@ export const saveStoredSpreadsheetId = (id: string) => {
 export const getAutoSyncEnabled = (): boolean => {
   try {
     const val = localStorage.getItem(STORAGE_KEY_AUTO_SYNC);
-    return val !== 'false'; // default true
+    return val !== 'false';
   } catch {
     return true;
   }
@@ -93,6 +49,100 @@ export const setAutoSyncEnabled = (enabled: boolean) => {
   } catch (e) {
     console.error(e);
   }
+};
+
+export const getGoogleAccessToken = (): string | null => {
+  if (cachedAccessToken) return cachedAccessToken;
+  try {
+    return localStorage.getItem(STORAGE_KEY_TOKEN);
+  } catch {
+    return null;
+  }
+};
+
+export const getConnectedEmail = (): string | null => {
+  if (cachedUserEmail) return cachedUserEmail;
+  try {
+    return localStorage.getItem(STORAGE_KEY_EMAIL);
+  } catch {
+    return null;
+  }
+};
+
+export const signOutGoogle = () => {
+  cachedAccessToken = null;
+  cachedUserEmail = null;
+  try {
+    localStorage.removeItem(STORAGE_KEY_TOKEN);
+    localStorage.removeItem(STORAGE_KEY_EMAIL);
+  } catch {}
+};
+
+// Sign in with Google using Google Identity Services (GIS) token client (Bypasses auth/unauthorized-domain errors on Vercel and custom domains)
+export const signInWithGoogleSheets = async (): Promise<{ email: string; accessToken: string }> => {
+  return new Promise((resolve, reject) => {
+    if (!window.google?.accounts?.oauth2) {
+      reject(new Error('Google Identity Services script is loading or blocked. Please check ad blockers or reload.'));
+      return;
+    }
+
+    try {
+      const tokenClient = window.google.accounts.oauth2.initTokenClient({
+        client_id: CLIENT_ID,
+        scope: SCOPES,
+        callback: async (response: any) => {
+          if (response.error) {
+            reject(new Error(response.error_description || response.error));
+            return;
+          }
+          const accessToken = response.access_token;
+          cachedAccessToken = accessToken;
+          try {
+            localStorage.setItem(STORAGE_KEY_TOKEN, accessToken);
+          } catch {}
+
+          let email = 'admin@yaarika.com';
+          try {
+            const userRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+              headers: { Authorization: `Bearer ${accessToken}` }
+            });
+            if (userRes.ok) {
+              const userData = await userRes.json();
+              if (userData.email) {
+                email = userData.email;
+                cachedUserEmail = email;
+                try {
+                  localStorage.setItem(STORAGE_KEY_EMAIL, email);
+                } catch {}
+              }
+            }
+          } catch {}
+
+          resolve({ email, accessToken });
+        }
+      });
+
+      tokenClient.requestAccessToken();
+    } catch (err) {
+      reject(err);
+    }
+  });
+};
+
+export const initGoogleAuth = (
+  onAuthSuccess?: (user: { email: string }, token: string) => void,
+  onAuthFailure?: () => void
+) => {
+  const token = getGoogleAccessToken();
+  const email = getConnectedEmail() || 'admin@yaarika.com';
+  if (token) {
+    cachedAccessToken = token;
+    cachedUserEmail = email;
+    if (onAuthSuccess) onAuthSuccess({ email }, token);
+  } else {
+    if (onAuthFailure) onAuthFailure();
+  }
+  return () => {};
 };
 
 // Create a new Google Sheet for Yaarika Boutique
@@ -126,7 +176,6 @@ export const createYaarikaSpreadsheet = async (accessToken: string): Promise<str
   const spreadsheetId = data.spreadsheetId;
   saveStoredSpreadsheetId(spreadsheetId);
 
-  // Initialize headers
   await updateSheetValues(spreadsheetId, accessToken, 'Products!A1:N1', [
     [
       'ID',
@@ -172,12 +221,12 @@ export const fetchProductsFromSheet = async (spreadsheetId: string, accessToken:
   return parseRowsToProducts(productRows);
 };
 
-// Read products from Published Google Sheet CSV (Unauthenticated / Public access for any visitor anywhere)
+// Read products from Published Google Sheet CSV (Unauthenticated / Public access)
 export const fetchProductsFromPublicSheet = async (spreadsheetId: string): Promise<Product[]> => {
   const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&sheet=Products`;
   const res = await fetch(url);
   if (!res.ok) {
-    throw new Error('Could not load products from Google Sheet. Make sure the sheet is shared or published to web.');
+    throw new Error('Could not load products from Google Sheet. Make sure the sheet is published to web (File -> Share -> Publish to web -> CSV).');
   }
   const csvText = await res.text();
   const rows = parseCsvText(csvText);
@@ -272,9 +321,7 @@ function parseRowsToProducts(productRows: string[][]): Product[] {
       if (row[13]) {
         sizes = JSON.parse(row[13]);
       }
-    } catch {
-      // fallback
-    }
+    } catch {}
 
     let category: Exclude<ProductCategory, 'All'> = 'Traditional Sarees';
     const catVal = row[3]?.trim();
