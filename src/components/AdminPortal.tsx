@@ -12,6 +12,20 @@ import { Product, ProductCategory } from '../types';
 import { HeroSlideItem, INITIAL_HERO_SLIDES } from '../data/initialSlides';
 import { BOUTIQUE_INFO, INITIAL_PRODUCTS } from '../data/initialProducts';
 import { exportProductsToExcel, exportProductsToCSV, parseExcelOrCsvFile } from '../utils/excelUtils';
+import { 
+  initGoogleAuth, 
+  signInWithGoogleSheets, 
+  signOutGoogle, 
+  getGoogleAccessToken, 
+  getStoredSpreadsheetId, 
+  saveStoredSpreadsheetId, 
+  createYaarikaSpreadsheet, 
+  fetchProductsFromSheet, 
+  fetchProductsFromPublicSheet, 
+  syncProductsToSheet, 
+  getAutoSyncEnabled, 
+  setAutoSyncEnabled 
+} from '../utils/googleSheetsService';
 import heroKasavuImg from '@/src/assets/images/hero_kasavu_saree_1791103965122.jpg';
 import tissueKasavuImg from '@/src/assets/images/product_tissue_kasavu_1791103981693.jpg';
 import kanjeevaramImg from '@/src/assets/images/product_kanjeevaram_silk_1791103996721.jpg';
@@ -98,9 +112,46 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
     | 'bulk' 
     | 'hero-slider' 
     | 'whatsapp' 
-    | 'github';
+    | 'github'
+    | 'google-sheets';
 
   const [activeTab, setActiveTab] = useState<AdminTab>('catalog');
+
+  // Google Sheets Sync state
+  const [gsUser, setGsUser] = useState<any | null>(null);
+  const [gsToken, setGsToken] = useState<string | null>(null);
+  const [spreadsheetId, setSpreadsheetId] = useState<string>(getStoredSpreadsheetId());
+  const [isGsLoading, setIsGsLoading] = useState(false);
+  const [autoSyncSheets, setAutoSyncSheets] = useState<boolean>(getAutoSyncEnabled());
+
+  useEffect(() => {
+    const unsubscribe = initGoogleAuth(
+      (user, token) => {
+        setGsUser(user);
+        setGsToken(token);
+      },
+      () => {
+        setGsUser(null);
+        setGsToken(null);
+      }
+    );
+    return () => unsubscribe();
+  }, []);
+
+  const triggerAutoSync = async (updatedProducts: Product[]) => {
+    if (autoSyncSheets && spreadsheetId && gsToken) {
+      try {
+        await syncProductsToSheet(spreadsheetId, gsToken, updatedProducts);
+      } catch (err) {
+        console.error('Background Google Sheet sync error:', err);
+      }
+    }
+  };
+
+  const handleUpdateProductsAndSync = (newProducts: Product[]) => {
+    onUpdateProducts(newProducts);
+    triggerAutoSync(newProducts);
+  };
 
   // Search & Status Filters for Live Catalog
   const [catalogSearch, setCatalogSearch] = useState('');
@@ -245,7 +296,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
 
   const confirmDeleteProduct = () => {
     if (!productToDelete) return;
-    onUpdateProducts(products.filter((p) => p.id !== productToDelete.id));
+    handleUpdateProductsAndSync(products.filter((p) => p.id !== productToDelete.id));
     showNotification(`Deleted product "${productToDelete.name}" successfully!`);
     setProductToDelete(null);
   };
@@ -259,7 +310,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
   };
 
   const confirmDeleteAllProducts = () => {
-    onUpdateProducts([]);
+    handleUpdateProductsAndSync([]);
     showNotification('All products deleted from live catalog successfully!');
     setIsDeleteAllModalOpen(false);
   };
@@ -321,7 +372,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
       totalStock: totalStock > 0 ? totalStock : (editFormData.inStock ? 10 : 0)
     };
 
-    onUpdateProducts(products.map((p) => p.id === editingProduct.id ? updated : p));
+    handleUpdateProductsAndSync(products.map((p) => p.id === editingProduct.id ? updated : p));
     setEditingProduct(null);
     showNotification(`Saved changes to "${updated.name}"`);
   };
@@ -331,13 +382,13 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
     const updated = products.map((p) => 
       p.id === productId ? { ...p, inStock: !p.inStock } : p
     );
-    onUpdateProducts(updated);
+    handleUpdateProductsAndSync(updated);
     showNotification('Product inventory status updated');
   };
 
   // Load Sample Showcase
   const handleLoadSampleShowcase = () => {
-    onUpdateProducts(INITIAL_PRODUCTS);
+    handleUpdateProductsAndSync(INITIAL_PRODUCTS);
     showNotification('Loaded 5 sample boutique products successfully!');
   };
 
@@ -480,7 +531,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
       };
     });
 
-    onUpdateProducts([...newProducts, ...products]);
+    handleUpdateProductsAndSync([...newProducts, ...products]);
     showNotification(`Published ${newProducts.length} product(s) to boutique catalog!`);
     setActiveTab('catalog');
     setLayers([createEmptyLayer(1)]);
@@ -642,6 +693,22 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                 <span>Excel (.xlsx) Sheet Upload</span>
                 <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-400/40 text-[9px] px-1.5 py-0.2 rounded font-extrabold uppercase">
                   NEW
+                </span>
+              </button>
+
+              {/* Tab: Google Sheets Sync */}
+              <button
+                onClick={() => setActiveTab('google-sheets')}
+                className={`flex items-center gap-1.5 text-xs font-bold px-3.5 py-1.5 rounded-full transition-all cursor-pointer ${
+                  activeTab === 'google-sheets'
+                    ? 'bg-[#3e081c] text-[#f5d78a] border border-[#d4a341] shadow-sm'
+                    : 'text-stone-300 hover:text-white hover:bg-white/5'
+                }`}
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Google Sheets Sync</span>
+                <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-400/40 text-[9px] px-1.5 py-0.2 rounded font-extrabold uppercase">
+                  LIVE
                 </span>
               </button>
 
@@ -2285,6 +2352,209 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                   <ExternalLink className="w-3 h-3" />
                 </a>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* VIEW: GOOGLE SHEETS REAL-TIME SYNC TAB                                    */}
+        {/* ========================================================================= */}
+        {isAuthenticated && activeTab === 'google-sheets' && (
+          <div className="bg-[#fbf5e6] rounded-2xl p-6 shadow-xl border border-[#dfc88c] space-y-6 text-left">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-full bg-emerald-900 text-emerald-200 border border-emerald-500 flex items-center justify-center shrink-0">
+                <FileSpreadsheet className="w-6 h-6" />
+              </div>
+              <div>
+                <h2 className="font-serif-luxury text-xl font-bold text-stone-900">
+                  Google Sheets Real-Time Sync (Rithik's Setup)
+                </h2>
+                <p className="text-xs text-stone-600">
+                  Admin product additions, edits, and deletions automatically sync with your Google Sheet so anyone anywhere opening the website views the latest products.
+                </p>
+              </div>
+            </div>
+
+            {/* Google Sign-In & Auth Status */}
+            <div className="p-4 rounded-xl bg-[#fffdf7] border border-[#dfc88c] space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-bold text-stone-800">Google Account Connection</div>
+                  <div className="text-[11px] text-stone-600">
+                    {gsUser ? `Connected as ${gsUser.email}` : 'Not connected to Google Workspace'}
+                  </div>
+                </div>
+
+                {!gsUser ? (
+                  <button
+                    onClick={async () => {
+                      try {
+                        setIsGsLoading(true);
+                        const res = await signInWithGoogleSheets();
+                        setGsUser(res.user);
+                        setGsToken(res.accessToken);
+                        showNotification(`Connected to Google Sheets as ${res.user.email}`);
+                      } catch (err: any) {
+                        alert('Google Sign-in failed: ' + err.message);
+                      } finally {
+                        setIsGsLoading(false);
+                      }
+                    }}
+                    disabled={isGsLoading}
+                    className="flex items-center gap-2 px-4 py-2 bg-white hover:bg-stone-50 border border-stone-300 rounded-xl text-xs font-bold text-stone-700 shadow-xs cursor-pointer"
+                  >
+                    <svg className="w-4 h-4" viewBox="0 0 24 24">
+                      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+                      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+                    </svg>
+                    <span>Sign in with Google (Sheets)</span>
+                  </button>
+                ) : (
+                  <button
+                    onClick={async () => {
+                      await signOutGoogle();
+                      setGsUser(null);
+                      setGsToken(null);
+                      showNotification('Disconnected Google account');
+                    }}
+                    className="px-3 py-1.5 bg-rose-100 hover:bg-rose-200 text-rose-800 text-xs font-bold rounded-lg cursor-pointer"
+                  >
+                    Disconnect
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Spreadsheet ID & Management */}
+            <div className="p-4 rounded-xl bg-[#fffdf7] border border-[#dfc88c] space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-stone-800 mb-1">
+                  Google Spreadsheet ID or Link
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={spreadsheetId}
+                    onChange={(e) => {
+                      const val = e.target.value.trim();
+                      setSpreadsheetId(val);
+                      saveStoredSpreadsheetId(val);
+                    }}
+                    placeholder="e.g. 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms"
+                    className="flex-1 px-3.5 py-2 rounded-xl border border-[#dfc88c] text-xs font-mono bg-[#fffdf7]"
+                  />
+                  <button
+                    onClick={async () => {
+                      if (!gsToken) {
+                        alert('Please sign in with Google first.');
+                        return;
+                      }
+                      try {
+                        setIsGsLoading(true);
+                        const newId = await createYaarikaSpreadsheet(gsToken);
+                        setSpreadsheetId(newId);
+                        showNotification('Created new Yaarika Google Sheet successfully!');
+                      } catch (err: any) {
+                        alert('Error creating sheet: ' + err.message);
+                      } finally {
+                        setIsGsLoading(false);
+                      }
+                    }}
+                    disabled={isGsLoading || !gsToken}
+                    className="px-4 py-2 bg-[#380718] hover:bg-[#520d26] text-[#f5d78a] font-bold text-xs rounded-xl shadow-xs cursor-pointer disabled:opacity-50"
+                  >
+                    + Create New Sheet
+                  </button>
+                </div>
+                <p className="text-[11px] text-stone-500 mt-1">
+                  Paste your Google Sheet ID or click Create New Sheet to generate one automatically.
+                </p>
+              </div>
+
+              {/* Sync Actions */}
+              <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-[#dfc88c]/60">
+                <button
+                  onClick={async () => {
+                    if (!spreadsheetId) {
+                      alert('Please provide or create a Google Spreadsheet ID.');
+                      return;
+                    }
+                    if (!gsToken) {
+                      alert('Please sign in with Google to push sync.');
+                      return;
+                    }
+                    try {
+                      setIsGsLoading(true);
+                      await syncProductsToSheet(spreadsheetId, gsToken, products);
+                      showNotification(`Synced ${products.length} products to Google Sheet successfully!`);
+                    } catch (err: any) {
+                      alert('Sync failed: ' + err.message);
+                    } finally {
+                      setIsGsLoading(false);
+                    }
+                  }}
+                  disabled={isGsLoading || !spreadsheetId}
+                  className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs rounded-xl shadow-xs cursor-pointer flex items-center gap-1.5"
+                >
+                  <CloudCheck className="w-4 h-4" />
+                  <span>Sync Catalog TO Google Sheet (Push)</span>
+                </button>
+
+                <button
+                  onClick={async () => {
+                    if (!spreadsheetId) {
+                      alert('Please provide a Google Spreadsheet ID.');
+                      return;
+                    }
+                    try {
+                      setIsGsLoading(true);
+                      const fetched = gsToken 
+                        ? await fetchProductsFromSheet(spreadsheetId, gsToken)
+                        : await fetchProductsFromPublicSheet(spreadsheetId);
+                      if (fetched.length > 0) {
+                        handleUpdateProductsAndSync(fetched);
+                        showNotification(`Loaded ${fetched.length} products from Google Sheet!`);
+                      } else {
+                        showNotification('Spreadsheet is empty or headers not found.');
+                      }
+                    } catch (err: any) {
+                      alert('Load failed: ' + err.message + '. Make sure the sheet is shared or published to web (File -> Share -> Publish to web -> CSV).');
+                    } finally {
+                      setIsGsLoading(false);
+                    }
+                  }}
+                  disabled={isGsLoading || !spreadsheetId}
+                  className="px-4 py-2 bg-[#380718] hover:bg-[#520d26] text-[#f5d78a] font-bold text-xs rounded-xl shadow-xs cursor-pointer flex items-center gap-1.5"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>Load Catalog FROM Google Sheet (Pull)</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Auto-Sync Toggle */}
+            <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-between">
+              <div>
+                <div className="text-xs font-bold text-amber-900">Automatic Sync on Admin Add / Edit / Delete</div>
+                <div className="text-[11px] text-amber-800">
+                  When enabled, any product added, edited, or deleted in the admin portal automatically updates the Google Sheet in the background.
+                </div>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={autoSyncSheets}
+                  onChange={(e) => {
+                    setAutoSyncSheets(e.target.checked);
+                    setAutoSyncEnabled(e.target.checked);
+                    showNotification(e.target.checked ? 'Auto-sync enabled' : 'Auto-sync disabled');
+                  }}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-stone-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-stone-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+              </label>
             </div>
           </div>
         )}

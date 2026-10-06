@@ -11,6 +11,7 @@ import { AdminPortal } from './components/AdminPortal';
 import { Product, ProductCategory, CartItem } from './types';
 import { INITIAL_PRODUCTS } from './data/initialProducts';
 import { HeroSlideItem, INITIAL_HERO_SLIDES } from './data/initialSlides';
+import { fetchProductsFromPublicSheet, getStoredSpreadsheetId } from './utils/googleSheetsService';
 
 const STORAGE_KEY_PRODUCTS = 'yaarika_products_v1';
 const STORAGE_KEY_WISHLIST = 'yaarika_wishlist_v1';
@@ -29,7 +30,7 @@ export default function App() {
     return INITIAL_HERO_SLIDES;
   });
 
-  // Products Catalog (with localStorage persistence)
+  // Products Catalog (with localStorage persistence & Google Sheets sync)
   const [products, setProducts] = useState<Product[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_PRODUCTS);
@@ -39,6 +40,22 @@ export default function App() {
     }
     return INITIAL_PRODUCTS;
   });
+
+  // On mount, if Google Spreadsheet ID is configured, fetch products from Google Sheet for remote visitors anywhere
+  useEffect(() => {
+    const spreadsheetId = getStoredSpreadsheetId();
+    if (spreadsheetId) {
+      fetchProductsFromPublicSheet(spreadsheetId)
+        .then((sheetProducts) => {
+          if (sheetProducts && sheetProducts.length > 0) {
+            setProducts(sheetProducts);
+          }
+        })
+        .catch((err) => {
+          console.log('Using local/cached products (Google Sheet sync pending or private):', err);
+        });
+    }
+  }, []);
 
   // Navigation & Filter state
   const [activeCategory, setActiveCategory] = useState<ProductCategory>('All');
@@ -161,7 +178,7 @@ export default function App() {
   const wishlistIds = new Set(wishlist.map((p) => p.id));
   const cartIds = new Set(cartItems.map((item) => item.product.id));
 
-  // If in Admin Portal view (Screenshot 17)
+  // If in Admin Portal view
   if (isAdminView) {
     return (
       <AdminPortal
@@ -188,7 +205,6 @@ export default function App() {
   return (
     <div className="min-h-screen flex flex-col bg-[#FDF9F0] text-stone-900 selection:bg-[#dfb15b]/30">
       
-      {/* Top Bar, Monogram Header, Search, Categories (Screenshot 15) */}
       <Header
         activeCategory={activeCategory}
         onSelectCategory={(cat) => {
@@ -203,7 +219,6 @@ export default function App() {
         onOpenAdmin={() => setIsAdminView(true)}
       />
 
-      {/* Hero Carousel: Traditional Kerala Sarees & Designer Wear (Screenshot 15) */}
       <HeroSlider
         slides={heroSlides}
         onExploreCategory={(cat) => {
@@ -212,7 +227,6 @@ export default function App() {
         }}
       />
 
-      {/* Product Catalog Grid with filter/sort */}
       <main className="flex-1">
         <ProductGrid
           products={products}
@@ -230,13 +244,9 @@ export default function App() {
         />
       </main>
 
-      {/* Boutique Footer with Direct Order Desks & WhatsApp Desks (Screenshot 16) */}
       <Footer />
-
-      {/* Floating WhatsApp Action Button (Screenshot 16) */}
       <FloatingWhatsApp />
 
-      {/* Product Quick View / Detail Modal */}
       <ProductDetailModal
         product={selectedProduct}
         onClose={() => setSelectedProduct(null)}
@@ -246,7 +256,6 @@ export default function App() {
         isInCart={selectedProduct ? cartIds.has(selectedProduct.id) : false}
       />
 
-      {/* Shopping Bag Slide-over */}
       <CartDrawer
         isOpen={isCartOpen}
         onClose={() => setIsCartOpen(false)}
@@ -256,7 +265,6 @@ export default function App() {
         onClearCart={handleClearCart}
       />
 
-      {/* Wishlist Slide-over */}
       <WishlistDrawer
         isOpen={isWishlistOpen}
         onClose={() => setIsWishlistOpen(false)}
