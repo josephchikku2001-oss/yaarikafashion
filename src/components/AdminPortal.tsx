@@ -2438,11 +2438,13 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                     type="text"
                     value={spreadsheetId}
                     onChange={(e) => {
-                      const val = e.target.value.trim();
+                      const raw = e.target.value.trim();
+                      const match = raw.match(/\/d\/([a-zA-Z0-9-_]+)/);
+                      const val = match && match[1] ? match[1] : raw;
                       setSpreadsheetId(val);
                       saveStoredSpreadsheetId(val);
                     }}
-                    placeholder="e.g. 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms"
+                    placeholder="Paste Spreadsheet Link or ID (e.g. 1BxiMVs0X...)"
                     className="flex-1 px-3.5 py-2 rounded-xl border border-[#dfc88c] text-xs font-mono bg-[#fffdf7]"
                   />
                   <button
